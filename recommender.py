@@ -39,10 +39,12 @@ class CollaborativeRecommender:
         try:
             # Получаем сыгранные игры с гарантированной конвертацией в int
             played_games = self.get_played_games(user_id, user_games)
+            print('Played games:', *played_games, sep=' ')
 
+            recommendations = []
             # 1. Персональные рекомендации для известного пользователя
-            if user_id is not None and str(user_id) in self.user_mapping:
-                user_idx = self.user_mapping[str(user_id)]
+            if user_id is not None and user_id in self.user_mapping:
+                user_idx = self.user_mapping[user_id]
                 personal_scores = {}
                 for appid, idx in self.game_mapping.items():
                     appid_int = int(appid)
@@ -54,23 +56,41 @@ class CollaborativeRecommender:
                     #recs = self.diversify_recommendations(personal_scores, n, diversity)
                     # Дополнительная проверка на исключение сыгранных игр
                     # return [game for game in recs if not filter_played or game not in played_games][:n]
-                    return personal_scores[:n]
+
+                    # return personal_scores[:n]
+                    recommendations.extend(sorted(personal_scores.items(), key=lambda x: -x[1])[:n])
 
             # 2. Гибридные рекомендации по списку игр
-            if user_games is not None and len(user_games) > 0:
+            if user_games and len(user_games) > 0:
                 hybrid_scores = self.get_hybrid_scores(user_games, played_games)
 
                 if hybrid_scores:
+                    # НОВОЕ ДО RETURN
+                    combined_scores = {}
+                    # Добавляем базовые рекомендации с весом 1.0
+                    for appid, score in recommendations:
+                        combined_scores[appid] = score * 1.0  # полный вес старым предпочтениям
+                    # Добавляем влияние новых игр с весом 0.5
+                    for appid, score in hybrid_scores.items():
+                        if appid in combined_scores:
+                            combined_scores[appid] += score * 0.5  # Усиливаем имеющиеся
+                        else:
+                            combined_scores[appid] = score * 0.5  # Добавляем новые
+                    recommendations = sorted(combined_scores.items(), key=lambda x: -x[1])
                     # recs = self.diversify_recommendations(hybrid_scores, n, diversity/2)
                     # return [game for game in recs if not filter_played or game not in played_games][:n]
-                    return hybrid_scores[:n]
+                    # return hybrid_scores[:n] #last
 
             # 3. Холодный старт
-            cold_start_recs = self.get_cold_start_recommendations(n*2) #, exclude=played_games
-            weights = np.arange(len(cold_start_recs), 0, -1) ** 0.5
-            weights = weights / weights.sum()
-            selected = np.random.choice(len(cold_start_recs), size=n, replace=False, p=weights)
-            return [cold_start_recs[i] for i in selected]
+            if not recommendations:
+                cold_start_recs = self.get_cold_start_recommendations(n*2) #, exclude=played_games
+                weights = np.arange(len(cold_start_recs), 0, -1) ** 0.5
+                weights = weights / weights.sum()
+                selected = np.random.choice(len(cold_start_recs), size=n, replace=False, p=weights)
+                recommendations = [(cold_start_recs[i], 0) for i in selected]  # [cold_start_recs[i] for i in selected]
+
+            # Возвращаем топ-N appid
+            return [appid for appid, score in recommendations[:n]]
         except Exception as e:
             print(f"Recommendation error: {str(e)}")
             if self.is_trained:
@@ -83,8 +103,8 @@ class CollaborativeRecommender:
         played = set()
 
         # игры из матрицы для известных пользователей
-        if user_id is not None and str(user_id) in self.user_mapping:
-            user_idx = self.user_mapping[str(user_id)]
+        if user_id is not None and user_id in self.user_mapping:
+            user_idx = self.user_mapping[user_id]
             played.update([
                 int(appid)
                 for appid in self.user_item_matrix.columns
@@ -102,33 +122,34 @@ class CollaborativeRecommender:
 
     # для разнообразия рекомендаций - чтобы не одни и те же попадались
     # можно попробовать без этого, закомментировать
-    def diversify_recommendations(self, scores, n, diversity_factor):
-        if not scores or len(scores) < 3:  # Не добавляем разнообразие для малого числа вариантов
-            return sorted(scores.keys(), key=lambda x: -scores[x])[:n]
-
-        items = sorted(scores.items(), key=lambda x: -x[1])
-
-        # Берем топ 3*n для лучшего разнообразия
-        top_items = items[:3*n]
-
-        # Веса с экспоненциальным затуханием
-        ranks = np.arange(len(top_items))
-        weights = np.exp(-diversity_factor * ranks)
-        weights = weights / weights.sum()
-
-        # Выбираем случайно, но с учетом весов
-        selected = np.random.choice(
-            len(top_items),
-            size=min(n, len(top_items)),
-            replace=False,
-            p=weights
-        )
-
-        # Сортируем выбранные по убыванию релевантности
-        result = [top_items[i][0] for i in selected]
-        result.sort(key=lambda x: -scores[x])
-
-        return result
+    # нужно будет, скорее всего, обновить
+    # def diversify_recommendations(self, scores, n, diversity_factor):
+    #     if not scores or len(scores) < 3:  # Не добавляем разнообразие для малого числа вариантов
+    #         return sorted(scores.keys(), key=lambda x: -scores[x])[:n]
+    #
+    #     items = sorted(scores.items(), key=lambda x: -x[1])
+    #
+    #     # Берем топ 3*n для лучшего разнообразия
+    #     top_items = items[:3*n]
+    #
+    #     # Веса с экспоненциальным затуханием
+    #     ranks = np.arange(len(top_items))
+    #     weights = np.exp(-diversity_factor * ranks)
+    #     weights = weights / weights.sum()
+    #
+    #     # Выбираем случайно, но с учетом весов
+    #     selected = np.random.choice(
+    #         len(top_items),
+    #         size=min(n, len(top_items)),
+    #         replace=False,
+    #         p=weights
+    #     )
+    #
+    #     # Сортируем выбранные по убыванию релевантности
+    #     result = [top_items[i][0] for i in selected]
+    #     result.sort(key=lambda x: -scores[x])
+    #
+    #     return result
 
     # по списку игр (интересная идея с вектором предпочтений и логарифмом для сглаживания разницы)
     def get_hybrid_scores(self, user_games, played_games):

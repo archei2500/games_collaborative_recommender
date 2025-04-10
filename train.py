@@ -10,7 +10,8 @@ import os
 
 def preprocess_data(data):
     # Удаление дубликатов
-    clean_data = data.drop_duplicates(['steamid', 'appid'], keep='last')
+    clean_data = data.copy()
+    clean_data = clean_data.drop_duplicates(['steamid', 'appid'], keep='last')
 
     # Логарифмирование времени игры
     clean_data.loc[:, 'playtime_log'] = np.log1p(clean_data['playtime_forever'])
